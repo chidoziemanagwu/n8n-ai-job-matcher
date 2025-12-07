@@ -1,0 +1,562 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            },
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -976,
+        -192
+      ],
+      "id": "2770c412-1a54-490b-b819-49020d7b561d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": "{{CV_FILE_ID}}",
+        "options": {
+          "googleFileConversion": {
+            "conversion": {
+              "docsToFormat": "text/plain"
+            }
+          }
+        }
+      },
+      "id": "f59cefde-ad61-4caa-a668-bd0b76fbc5e2",
+      "name": "Fetch CV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -768,
+        -192
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_jobs"
+            },
+            {
+              "name": "q",
+              "value": "full stack developer OR python developer OR backend developer OR n8n developer OR AI engineer"
+            },
+            {
+              "name": "location",
+              "value": "United Kingdom"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            },
+            {
+              "name": "api_key",
+              "value": "{{SERPAPI_API_KEY}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "426f9d66-dd09-4c8b-833a-d13143751539",
+      "name": "Get Jobs (SerpAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -576,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cvNode = $input.all()[0];\nconst cv = cvNode?.binary?.data ? Buffer.from(cvNode.binary.data.data, 'base64').toString('utf-8') : '';\n\nconst jobs = $json.jobs_results || [];\nconsole.log('Found jobs:', jobs.length);\n\nreturn jobs.map(j => ({\n  json: {\n    cv: cv,\n    title: j.title || '',\n    company: j.company_name || '',\n    link: j.share_link || '',\n    description: j.description || '',\n    location: j.location || '',\n    source: 'Google Jobs',\n    extensions: j.extensions || [],\n    job_highlights: j.job_highlights || []\n  }\n}));"
+      },
+      "id": "82cbecb7-0cae-4ab4-be6c-a9d51ca66f14",
+      "name": "Prepare Job Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const cv = ($json.cv || '').slice(0, 15000);\nconst title = $json.title || '';\nconst company = $json.company || '';\nconst location = $json.location || '';\nconst link = $json.link || '';\nconst source = $json.source || 'Google Jobs';\nconst description = ($json.description || '').slice(0, 4000);\n\nconst chatInput = `Compare the following job with the CV and return strict JSON only.\nRules:\n- Output ONLY JSON, no code fences, no extra text.\n- Keys: title, company, link, location, source, score (1-10), fit_reason (<=150 chars), summary (<=200 chars).\n\nCV:\n${cv}\n\nJob:\nTitle: ${title}\nCompany: ${company}\nLocation: ${location}\nDescription: ${description}\nLink: ${link}\n\nReturn exactly this JSON:\n{\n  \"title\": \"${title}\",\n  \"company\": \"${company}\",\n  \"link\": \"${link}\",\n  \"location\": \"${location}\",\n  \"source\": \"${source}\",\n  \"score\": <integer 1-10>,\n  \"fit_reason\": \"<150 chars plain text>\",\n  \"summary\": \"<200 chars plain text>\"\n}`;\n\nreturn {\n  json: {\n    chatInput,\n    title,\n    company,\n    link,\n    location,\n    source\n  }\n};"
+      },
+      "id": "b37a82b4-1c8a-4b71-95d3-5dc1408e0f40",
+      "name": "Build chatInput",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "80f076f4-a521-45a6-a665-6f7904fb6452",
+      "name": "Groq Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        32,
+        -32
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_API_CREDENTIAL_ID",
+          "name": "Groq account (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "819e6d6e-0338-464e-9229-383aa84b9435",
+      "name": "AI Match + Summary",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        32,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.output ?? $json.text ?? $json.response ?? '';\nconst text = typeof raw === 'string' ? raw : JSON.stringify(raw || {});\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(text);\n} catch (e) {\n  // AI didn't return valid JSON\n}\n\nconst link = parsed.link || $json.link || '';\nconst title = parsed.title || $json.title || '';\nconst company = parsed.company || $json.company || '';\nconst location = parsed.location || $json.location || '';\n\n// Prefer link as unique ID, fallback to title+company+location\nconst jobId = (link || `${title} | ${company} | ${location}`).trim();\n\nreturn {\n  json: {\n    title,\n    company,\n    link,\n    location,\n    source: parsed.source || $json.source || 'Google Jobs',\n    job_id: jobId,\n    score: Math.max(1, Math.min(10, Number(parsed.score) || 0)),\n    fit_reason: (parsed.fit_reason || '').slice(0, 150).trim() || 'No reason provided',\n    summary: (parsed.summary || '').slice(0, 200).trim() || 'No summary available',\n    date: new Date().toISOString().split('T')[0]\n  }\n};"
+      },
+      "id": "c87d86df-498f-4c9c-aa6b-c441f3d2abef",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -352
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "{{SHEETS_DOCUMENT_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "JobSheet"
+        },
+        "options": {}
+      },
+      "id": "2a1027d2-65bc-48d3-b56a-4bbd27e83896",
+      "name": "Load Sent Jobs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -720,
+        112
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "passThrough",
+        "options": {}
+      },
+      "id": "7dd8aaf9-86fd-42e5-9ce7-f88524246b75",
+      "name": "Pass Trigger to Load Sent Jobs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\n\nconst sentMap = {};\nfor (const r of rows) {\n  const id = (r.json.job_id || r.json.link || '').trim();\n  if (id) {\n    sentMap[id] = true;\n  }\n}\n\nreturn [\n  {\n    json: {\n      sentMap\n    }\n  }\n];"
+      },
+      "id": "754ae4c1-9ea7-4801-afff-86d29716e7d6",
+      "name": "Build Sent Set",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        112
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9b101a8f-51bb-4314-82a4-ce9b9ecf67ed",
+      "name": "Merge Parsed Jobs with Sent Set",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        416,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nif (!items.length) {\n  return [];\n}\n\n// sentMap is on the item coming from Build Sent Set (input 2)\n// After mergeByIndex, each item has both jsons merged.\n\nconst newItems = [];\n\nfor (const item of items) {\n  const sentMap = item.json.sentMap || {}; // from Build Sent Set\n  const jobId = (item.json.job_id || item.json.link || '').trim();\n\n  if (!jobId || !sentMap[jobId]) {\n    // remove sentMap so it's not written to Sheets\n    const { sentMap: _ignore, ...rest } = item.json;\n    newItems.push({ json: rest });\n  }\n}\n\nreturn newItems;"
+      },
+      "id": "a02d5d71-2638-462a-9cc3-64a8c3b46c01",
+      "name": "Filter New Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "{{SHEETS_DOCUMENT_ID}}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "JobSheet"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fit_reason",
+              "displayName": "fit_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "53e6e9da-927e-4bb7-900f-132c7d912053",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        848,
+        -304
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account (redacted)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "{{TELEGRAM_CHAT_ID}}",
+        "text": "=💼 *{{ $json.title }}* ({{ $json.score }}/10)\n*Company:* {{ $json.company }}\n*Summary:* {{ $json.summary }}\n*Reason:* {{ $json.fit_reason }}\n🔗 {{ $json.link }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "b6169bad-6ec9-4487-b9e1-539aec17a544",
+      "name": "Send Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        848,
+        -96
+      ],
+      "webhookId": "b1db7219-c533-441c-8497-d8a5d6919935",
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_API_CREDENTIAL_ID",
+          "name": "Telegram account (redacted)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch CV",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pass Trigger to Load Sent Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch CV": {
+      "main": [
+        [
+          {
+            "node": "Get Jobs (SerpAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Jobs (SerpAPI)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Input": {
+      "main": [
+        [
+          {
+            "node": "Build chatInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build chatInput": {
+      "main": [
+        [
+          {
+            "node": "AI Match + Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Match + Summary",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Match + Summary": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Merge Parsed Jobs with Sent Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Sent Jobs": {
+      "main": [
+        [
+          {
+            "node": "Build Sent Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass Trigger to Load Sent Jobs": {
+      "main": [
+        [
+          {
+            "node": "Load Sent Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Sent Set": {
+      "main": [
+        [
+          {
+            "node": "Merge Parsed Jobs with Sent Set",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Parsed Jobs with Sent Set": {
+      "main": [
+        [
+          {
+            "node": "Filter New Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Jobs": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Telegram Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f5af06b2ce552f605c03f75b144be39e30ee28e1badde720c2db0aa55ae0dbdc"
+  }
+}
